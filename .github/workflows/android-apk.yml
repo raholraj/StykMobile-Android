@@ -1,16 +1,40 @@
 name: Android APK
 
-# Builds an installable debug APK of the Capacitor wrapper in mobile/ (see mobile/README.md).
-# Run it from the Actions tab ("Run workflow"); the APK is the artifact "styk-mobile-apk".
+# Unzips StykMobile-Android.zip (uploaded to repo root) then builds debug APK via Capacitor.
+# Run from Actions tab → Android APK → Run workflow. Artifact: styk-mobile-apk
 on:
   workflow_dispatch:
 
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: |
+          set -e
+          if [ ! -f StykMobile-Android.zip ]; then
+            echo "ERROR: StykMobile-Android.zip not found in repo root"
+            ls -la
+            exit 1
+          fi
+          echo "Unzipping StykMobile-Android.zip..."
+          unzip -q -o StykMobile-Android.zip
+          # ZIP extracts to StykAnimate-App-main/
+          if [ -d StykAnimate-App-main ]; then
+            echo "Moving contents of StykAnimate-App-main to workspace root"
+            shopt -s dotglob
+            mv StykAnimate-App-main/* .
+            rmdir StykAnimate-App-main || true
+            shopt -u dotglob
+          fi
+          echo "Project root contents:"
+          ls -la
+          test -f package.json || { echo "package.json missing after unzip"; exit 1; }
+          test -d mobile || { echo "mobile/ folder missing after unzip"; exit 1; }
+          test -f mobile/package.json || { echo "mobile/package.json missing"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
@@ -53,8 +77,17 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: Locate APK
+        id: find_apk
+        run: |
+          APK=$(find mobile/android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "Found APK: $APK"
+          ls -lh "$APK"
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
       - uses: actions/upload-artifact@v4
         with:
           name: styk-mobile-apk
           path: mobile/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 14
