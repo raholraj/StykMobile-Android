@@ -1,67 +1,50 @@
 /**
- * Boots Styk AI after the main app is ready.
- * Safe to load as a module from index.html.
+ * Boots Styk AI after the app shell is ready.
  */
 import { mountStykAi } from './ai-chat.mjs';
 
-function whenReady(fn) {
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    setTimeout(fn, 0);
-  } else {
-    document.addEventListener('DOMContentLoaded', () => setTimeout(fn, 0));
-  }
+function waitForStyk(timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (globalThis.styk?.editor) return resolve(globalThis.styk.editor);
+      if (Date.now() - start > timeoutMs) return resolve(null);
+      setTimeout(tick, 200);
+    };
+    tick();
+  });
 }
 
-function findEditor() {
-  return window.__stykEditor
-    || window.editor
-    || window.app?.editor
-    || window.styk?.editor
-    || null;
-}
+async function boot() {
+  if (document.getElementById('styk-ai-root')) return;
 
-function buildContext() {
-  const editor = findEditor();
-  const report = editor?.report;
-  let figureSummary = 'default Blue stick figure';
-  try {
-    const fig = report?.keyframes?.[0]?.objects?.[0]?.figure
-      || report?.keyframes?.[0]?.object?.figure;
-    if (fig?.segments?.length) {
-      figureSummary = `${fig.name || 'Figure'} · ${fig.segments.length} segments: `
-        + fig.segments.map(s => `${s.segment_id}:${s.name || s.segment_kind}`).join(', ');
-    }
-  } catch { /* ignore */ }
-  return {
-    figureSummary,
-    frameCount: report?.keyframes?.length,
-    currentFrame: editor?.frameIndex ?? 0,
-    fps: report?.fps || report?._styk?.fps || 12,
-    canvas: report ? { width: report.canvas_width, height: report.canvas_height } : null,
-  };
-}
-
-whenReady(() => {
-  // Inject CSS once
-  if (!document.getElementById('styk-ai-css')) {
+  if (!document.querySelector('link[data-styk-ai-css]')) {
     const link = document.createElement('link');
-    link.id = 'styk-ai-css';
     link.rel = 'stylesheet';
     link.href = './src/styles/features/ai-chat.css';
+    link.setAttribute('data-styk-ai-css', '1');
     document.head.appendChild(link);
   }
 
-  const panel = mountStykAi({
-    getEditor: findEditor,
-    getContext: buildContext,
+  await waitForStyk();
+
+  mountStykAi({
+    getEditor: () => globalThis.styk?.editor || globalThis.__stykEditor || null,
+    getContext: () => {
+      const ed = globalThis.styk?.editor;
+      if (!ed?.report) return {};
+      return {
+        frameCount: ed.report.keyframes?.length ?? 0,
+        frameIndex: ed.frameIndex ?? 0,
+        hasFigure: Boolean(ed.frame?.objects?.length),
+      };
+    },
   });
+  console.info('[Styk AI] panel ready');
+}
 
-  // Expose for debugging / future editor hooks
-  window.StykAI = {
-    panel,
-    open: () => panel.toggle(true),
-    close: () => panel.toggle(false),
-  };
-
-  console.info('[Styk AI] Ready — open the AI button (bottom-right).');
-});
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => boot().catch(console.error));
+} else {
+  boot().catch(console.error);
+}
