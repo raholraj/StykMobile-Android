@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
  * Injects Styk AI feature into an extracted StykAnimate project root.
- * Usage: node scripts/inject-ai.mjs [projectRoot]
- * Default projectRoot = process.cwd()
+ * Usage: node ai-overlay/scripts/inject-ai.mjs [projectRoot]
  */
 import { copyFile, mkdir, readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const overlayRoot = path.resolve(here, '..'); // ai-feature/
+const overlayRoot = path.resolve(here, '..');
 const projectRoot = path.resolve(process.argv[2] || process.cwd());
 
 async function exists(p) {
@@ -19,7 +18,6 @@ async function exists(p) {
 async function main() {
   console.log('Injecting Styk AI into', projectRoot);
 
-  // 1. Copy AI modules
   const files = [
     ['src/ai/ai-providers.mjs', 'src/ai/ai-providers.mjs'],
     ['src/ai/ai-system-prompt.mjs', 'src/ai/ai-system-prompt.mjs'],
@@ -32,12 +30,15 @@ async function main() {
   for (const [fromRel, toRel] of files) {
     const from = path.join(overlayRoot, fromRel);
     const to = path.join(projectRoot, toRel);
+    if (!(await exists(from))) {
+      console.warn('  skip missing', fromRel);
+      continue;
+    }
     await mkdir(path.dirname(to), { recursive: true });
     await copyFile(from, to);
     console.log('  +', toRel);
   }
 
-  // 2. Patch index.html – CSP + script
   const indexPath = path.join(projectRoot, 'index.html');
   if (!(await exists(indexPath))) {
     console.warn('index.html not found – skip HTML patch');
@@ -45,7 +46,6 @@ async function main() {
   }
   let html = await readFile(indexPath, 'utf8');
 
-  // Expand connect-src so AI providers work
   const connectExtra = [
     'https://api.groq.com',
     'https://generativelanguage.googleapis.com',
@@ -64,7 +64,6 @@ async function main() {
     console.log('  ~ CSP connect-src expanded for AI providers');
   }
 
-  // Add bootstrap script before </body> if missing
   if (!html.includes('ai-bootstrap.mjs')) {
     html = html.replace(
       /<\/body>/i,
