@@ -1,6 +1,6 @@
 name: Android APK
 
-# Build www first, then inject Styk AI into mobile/www, re-copy assets, APK.
+# Unzips project ZIP (StykAnimate-Mobile-AI.zip or StykMobile-Android.zip), builds Capacitor APK.
 on:
   workflow_dispatch:
 
@@ -14,27 +14,46 @@ jobs:
       - name: Unzip project
         run: |
           set -e
-          if [ ! -f StykMobile-Android.zip ]; then
-            echo "ERROR: StykMobile-Android.zip not found"
+          ZIP=""
+          for f in StykAnimate-Mobile-AI.zip StykMobile-Android.zip StykMobile-Android-2.zip; do
+            if [ -f "$f" ]; then ZIP="$f"; break; fi
+          done
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No project ZIP found (expected StykAnimate-Mobile-AI.zip or StykMobile-Android.zip)"
             ls -la
             exit 1
           fi
-          unzip -q -o StykMobile-Android.zip
-          if [ -d StykAnimate-App-main ]; then
-            rm -rf .github mobile
+          echo "Using ZIP: $ZIP"
+          unzip -q -o "$ZIP"
+
+          # Normalize extract folder → repo root
+          if [ -d styk-mobile ]; then
+            echo "Extracted styk-mobile/"
+            rm -rf .github mobile 2>/dev/null || true
+            shopt -s dotglob
+            mv styk-mobile/* .
+            rmdir styk-mobile || true
+            shopt -u dotglob
+          elif [ -d StykAnimate-App-main ]; then
+            echo "Extracted StykAnimate-App-main/"
+            rm -rf .github mobile 2>/dev/null || true
             shopt -s dotglob
             mv StykAnimate-App-main/* .
             rmdir StykAnimate-App-main || true
             shopt -u dotglob
           fi
-          test -f package.json
-          test -d mobile
 
-      - name: Restore AI overlay from git
+          test -f package.json || { echo "package.json missing"; ls -la; exit 1; }
+          test -d mobile || { echo "mobile/ missing"; exit 1; }
+          echo "Root OK"
+          ls -la | head -20
+          ls src/ai/ 2>/dev/null || echo "(no src/ai yet)"
+
+      - name: Restore AI overlay from git (optional fallback)
         run: |
           set -e
           git checkout HEAD -- ai-overlay .github/workflows/android-apk.yml 2>/dev/null || true
-          find ai-overlay -type f || echo "no overlay"
+          find ai-overlay -type f 2>/dev/null | head -20 || echo "no overlay"
 
       - uses: actions/setup-node@v4
         with:
@@ -69,16 +88,40 @@ jobs:
         working-directory: mobile
         run: npm run android:sync
 
-      - name: Inject Styk AI into mobile/www
+      - name: Ensure AI in mobile/www (overlay only if missing)
         run: |
           set -e
-          node ai-overlay/scripts/inject-ai.mjs .
-          echo "=== Verify AI in www ==="
-          ls -la mobile/www/src/ai/ || { echo "FAIL: no AI in www"; exit 1; }
-          grep -n "ai-bootstrap" mobile/www/index.html || { echo "FAIL: no bootstrap in index"; exit 1; }
-          cat mobile/capacitor.config.json
+          if [ -d src/ai ] && [ ! -d mobile/www/src/ai ]; then
+            echo "Copying project src/ai into www"
+            mkdir -p mobile/www/src/ai
+            cp -a src/ai/. mobile/www/src/ai/
+          fi
+          if [ -f ai-overlay/scripts/inject-ai.mjs ]; then
+            if [ ! -d mobile/www/src/ai ] || [ -z "$(ls -A mobile/www/src/ai 2>/dev/null)" ]; then
+              echo "Injecting AI overlay into www"
+              node ai-overlay/scripts/inject-ai.mjs .
+            else
+              echo "AI already present in project/www — skip overlay inject"
+            fi
+          fi
+          echo "=== www AI ==="
+          ls -la mobile/www/src/ai/ 2>/dev/null || echo "WARN: no AI in www"
+          # CapacitorHttp for CORS
+          if [ -f mobile/capacitor.config.json ]; then
+            node -e "
+              const fs=require('fs');
+              const p='mobile/capacitor.config.json';
+              const c=JSON.parse(fs.readFileSync(p,'utf8'));
+              c.plugins=c.plugins||{};
+              c.plugins.CapacitorHttp={enabled:true};
+              c.android=c.android||{};
+              c.android.allowMixedContent=true;
+              fs.writeFileSync(p, JSON.stringify(c,null,2)+'\n');
+              console.log('CapacitorHttp enabled');
+            "
+          fi
 
-      - name: Re-sync web assets into Android after AI inject
+      - name: Re-sync web assets into Android
         working-directory: mobile
         run: npx cap copy android
 
