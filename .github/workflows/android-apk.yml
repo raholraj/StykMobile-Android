@@ -1,7 +1,6 @@
 name: Android APK
 
-# Unzips StykMobile-Android.zip, injects Styk AI, then builds debug APK.
-# Artifact: styk-mobile-apk
+# Build www first, then inject Styk AI into mobile/www, re-copy assets, APK.
 on:
   workflow_dispatch:
 
@@ -16,48 +15,26 @@ jobs:
         run: |
           set -e
           if [ ! -f StykMobile-Android.zip ]; then
-            echo "ERROR: StykMobile-Android.zip not found in repo root"
+            echo "ERROR: StykMobile-Android.zip not found"
             ls -la
             exit 1
           fi
-          echo "Unzipping StykMobile-Android.zip..."
           unzip -q -o StykMobile-Android.zip
           if [ -d StykAnimate-App-main ]; then
-            echo "Replacing workspace with contents of StykAnimate-App-main"
             rm -rf .github mobile
             shopt -s dotglob
             mv StykAnimate-App-main/* .
             rmdir StykAnimate-App-main || true
             shopt -u dotglob
           fi
-          echo "Project root contents:"
-          ls -la
-          test -f package.json || { echo "package.json missing after unzip"; exit 1; }
-          test -d mobile || { echo "mobile/ folder missing after unzip"; exit 1; }
+          test -f package.json
+          test -d mobile
 
       - name: Restore AI overlay from git
         run: |
           set -e
           git checkout HEAD -- ai-overlay .github/workflows/android-apk.yml 2>/dev/null || true
-          if [ ! -d ai-overlay ]; then
-            echo "WARNING: ai-overlay missing"
-            ls -la
-          else
-            echo "AI overlay present:"
-            find ai-overlay -type f
-          fi
-
-      - name: Inject Styk AI into project
-        run: |
-          set -e
-          if [ -f ai-overlay/scripts/inject-ai.mjs ]; then
-            node ai-overlay/scripts/inject-ai.mjs .
-            echo "AI injection done"
-            ls -la src/ai/ || true
-            grep -n "ai-bootstrap\|api.groq.com" index.html | head -5 || true
-          else
-            echo "Skip AI inject – overlay not found"
-          fi
+          find ai-overlay -type f || echo "no overlay"
 
       - uses: actions/setup-node@v4
         with:
@@ -91,6 +68,19 @@ jobs:
       - name: Build the web files and sync them into the project
         working-directory: mobile
         run: npm run android:sync
+
+      - name: Inject Styk AI into mobile/www
+        run: |
+          set -e
+          node ai-overlay/scripts/inject-ai.mjs .
+          echo "=== Verify AI in www ==="
+          ls -la mobile/www/src/ai/ || { echo "FAIL: no AI in www"; exit 1; }
+          grep -n "ai-bootstrap" mobile/www/index.html || { echo "FAIL: no bootstrap in index"; exit 1; }
+          cat mobile/capacitor.config.json
+
+      - name: Re-sync web assets into Android after AI inject
+        working-directory: mobile
+        run: npx cap copy android
 
       - name: Build the APK
         working-directory: mobile/android
