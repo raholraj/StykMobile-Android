@@ -1,0 +1,8 @@
+{
+  "appId": "com.stykmobile.app",
+  "appName": "Styk Mobile",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  }
+}
